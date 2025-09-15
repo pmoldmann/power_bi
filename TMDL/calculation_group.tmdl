@@ -1,0 +1,219 @@
+createOrReplace
+
+	table 'Calculation group'
+		lineageTag: 8cd1a985-d6b3-4fe5-ab38-5e033ccb24ca
+
+		calculationGroup
+
+			calculationItem Current = SELECTEDMEASURE()
+
+			calculationItem 'Current With Blank (Zero Conversion)' =
+					
+					// returns the selected timeseries but replaces blank values by zero. Can be used in visuals to replace blanks by zeros
+					
+					Var result = COALESCE(SELECTEDMEASURE(),0)
+					
+					return result
+
+			calculationItem 'Previous Month' =
+					
+					// calculates the measure for the previous month
+					
+					Var result = CALCULATE(
+						SELECTEDMEASURE(),
+						PARALLELPERIOD('Date'[Date],-1,MONTH)
+					)
+					
+					return result
+
+			calculationItem 'Same Period Last Year' =
+					
+					// calculates the measure for the same period in the last year.
+					
+					Var result = CALCULATE(
+						SELECTEDMEASURE(),
+						SAMEPERIODLASTYEAR('Date'[Date])
+					)
+					
+					return result
+
+			calculationItem 'Period Over Same Period Last Year' =
+					
+					// the difference between the selected period and the  same period in the last year.
+					
+					Var result = SELECTEDMEASURE()
+					
+					Var resultSPLY = CALCULATE(
+						SELECTEDMEASURE(),
+						SAMEPERIODLASTYEAR('Date'[Date])
+					)
+					
+					return result - resultSPLY
+
+			calculationItem 'Period Over Same Period Last Year %' =
+					
+					// the difference in % between the currently selected period and the same period in the last year.
+					
+					Var result = SELECTEDMEASURE()
+					
+					Var resultSPLY = CALCULATE(
+						SELECTEDMEASURE(),
+						SAMEPERIODLASTYEAR('Date'[Date])
+					)
+					
+					return DIVIDE(result - resultSPLY, resultSPLY,BLANK())
+
+				formatStringDefinition = "0.00 %;-0.00 %;0.00 %"
+
+			calculationItem 'Month Over Month' = ```
+					
+					// calculates the difference between the selected month and the previous month. 
+					
+					Var resultPrevMonth = CALCULATE(
+						SELECTEDMEASURE(),
+						PARALLELPERIOD('Date'[Date],-1,MONTH)
+					)
+					
+					Var result = SELECTEDMEASURE()
+					
+					return result - resultPrevMonth
+					```
+
+			calculationItem 'Month Over Month %' = ```
+					
+					// calculates the difference in % between the selected month and the previous month. 
+					
+					Var resultPrevMonth = CALCULATE(
+						SELECTEDMEASURE(),
+						PARALLELPERIOD('Date'[Date],-1,MONTH)
+					)
+					
+					Var result = SELECTEDMEASURE()
+					
+					return DIVIDE(result - resultPrevMonth, resultPrevMonth, BLANK())
+					```
+
+				formatStringDefinition = "0.00 %;-0.00 %;0.00 %"
+
+			calculationItem 'Last 12 Months' =
+					
+					/*
+					steps:
+					1. Calculate 12 months time period which includes the currently selected month and the 11 previous months
+					2. calculate measure based on this timeframe.
+					
+					This was designed to calculate 12 months moving averages on a monthly basis
+					*/
+					
+					
+					// old version: only monthly evaluation possible
+					// Var End_Of_Period = EOMONTH(max('Date'[Date]),0)
+					//Var Start_Of_Period = EOMONTH(End_Of_Period,-12) + 1
+					
+					//new version: looks at the last 365 or 366 days, whatever is valid
+					Var End_Of_Period = max('Date'[Date])
+					
+					Var Start_Reference_Date = End_Of_Period +1
+					
+					Var Start_Of_Period = DATE(YEAR(Start_Reference_Date)-1,MONTH(Start_Reference_Date), day(Start_Reference_Date))
+					
+					Var result = CALCULATE(
+						SELECTEDMEASURE(),
+						REMOVEFILTERS('Date'),
+						'Date'[Date] >=Start_Of_Period,
+						'Date'[Date] <= End_Of_Period
+					)
+					
+					return result
+
+			calculationItem 'Max Outlier Zscore' = ```
+					
+					
+					/*
+					returns the max z-score, if the z-score exceeds the defined "outlier_std_factor" variable.
+					This is to detect anomalies / possibly corrupt data. 
+					
+					Combine this in a table visual with a number of dimensions that you want to analyze to get the outliers over dates in the data. 
+					
+					calculation of z-score and robust z-score see e.g. https://databasecamp.de/statistik/z-score.
+					
+					We use the normal z-score which implies data to be distributed normally. The reason is just performance. Some comparisons showed that the differences between both numbers are not relevant for the within the end to end data model. But performance difference between both methods is vast (since medianx needs to order values by size). 
+					*/
+					
+					//Define the Sigma-Factor (threshold) that defines when an outlier is detected). HIgher values mean fewer outliers. Typical selection is 3.
+					//2 -> 4,5%; 2,5 -> 1% ; 3 -> 0,27%; 3,5 -> 0,05%; 4 -> 0,006%
+					Var outlier_std_deviation_factor = 3
+					
+					//Define the minimum standard deviation that returns any results. This is relevant when using average malo volume with this calculation item. The average malo volume might not or only slightly change within a date period. A minimum change would otherwise be recognized as outlier. We do only want outliers if the standard deviation is not tiny. 
+					Var min_std_deviation = 1
+					
+					//Outliers do only make sense if there is enough data points available.
+					Var min_number_observations = 10
+					
+					//Calculate statistical data: Number of calculated values, mean value, variance and standard deviation
+					//Var number_dates = DISTINCTCOUNT('Date'[Year And Month (Date)])
+					Var number_dates = sumx(
+					    filter(VALUES('Date'[Year And Month (Date)]),NOT(ISBLANK(SELECTEDMEASURE()))),
+					    1
+					)
+					
+					Var sum_value = sumx(VALUES('Date'[Year And Month (Date)]),SELECTEDMEASURE())
+					
+					Var mean_value = sum_value / number_dates  // use "MEDIANX('Date',[Average Malo Volume])"  if you want to implement the robust z-score. But have in mind that performance is much slower due to sorting. 
+					
+					Var result_variance = DIVIDE(1, number_dates,BLANK()) 
+					                        * sumx(FILTER(VALUES('Date'[Year And Month (Date)]),NOT(ISBLANK(SELECTEDMEASURE()))),
+					                        power(SELECTEDMEASURE() - mean_value,2))
+					
+					Var std_deviation = sqrt(result_variance)
+					
+					//return the max zscore of all outliers if there are any. Alternatively you could also select the average zscore or the number of outliers. But farthest away outlier seems to be the best way to find the biggest glitches in the data. 
+					Var max_zscore_outliers = maxx(FILTER(VALUES('Date'[Year And Month (Date)]),NOT(ISBLANK(SELECTEDMEASURE()))),
+					    Var zscore = abs(DIVIDE(SELECTEDMEASURE() - mean_value, std_deviation,BLANK()))
+					    Var result = if(zscore > outlier_std_deviation_factor, zscore, BLANK())
+					    return result
+					)
+					
+					return if(std_deviation > min_std_deviation && max_zscore_outliers > outlier_std_deviation_factor  &&  number_dates >= min_number_observations, max_zscore_outliers,BLANK())
+					```
+
+			calculationItem 'Standard Deviation' = ```
+					
+					/*
+					returns the standard deviation of values in regards to the daily volumes.
+					*/
+					
+					Var number_dates = CALCULATE(count('Date'[Date]))
+					
+					Var mean_value = averagex('Date',SELECTEDMEASURE())  
+					
+					Var varianz = DIVIDE(1,number_dates,BLANK()) * sumx('Date',power(SELECTEDMEASURE() - mean_value,2))
+					
+					Var std_deviation = sqrt(varianz)
+					
+					return std_deviation
+					```
+
+		/// Use this calculation group for time intelligence functionality on measures, e.g. comparison with previous year results
+		column 'Time Intelligence'
+			dataType: string
+			isKey
+			lineageTag: 58d94ba2-42f1-4850-8ca7-4b12c803cc18
+			isDefaultLabel
+			summarizeBy: none
+			sourceColumn: Name
+			sortByColumn: Ordinal
+
+			annotation SummarizationSetBy = Automatic
+
+		/// Sort order for the calculation groups.
+		column Ordinal
+			dataType: int64
+			isHidden
+			formatString: 0
+			lineageTag: 084db126-e6d5-413c-a682-b5024b2b6fb6
+			summarizeBy: sum
+			sourceColumn: Ordinal
+
+			annotation SummarizationSetBy = Automatic
+
